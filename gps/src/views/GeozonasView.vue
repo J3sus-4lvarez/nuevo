@@ -35,7 +35,10 @@
         <span class="close" @click="closeModal">&times;</span>
         <h2>Guardar Geozona</h2>
         <input v-model="geozoneName" placeholder="Nombre de la geozona" class="inputt" @keyup.enter="saveGeozone" />
-        <button @click="saveGeozone">Guardar Geozona</button>
+        <div class="modal-actions">
+          <button @click="closeModal">Cerrar</button>
+          <button @click="saveGeozone">Guardar Geozona</button>
+        </div>
       </div>
     </div>
     <!-- Modal para seleccionar dispositivo -->
@@ -57,7 +60,7 @@
 
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import NavBar from '../components/NavBar.vue';
 import * as L from 'leaflet';
 import Swal from 'sweetalert2';
@@ -133,8 +136,8 @@ const toggleDropdown = () => {
   dropdownOpen.value = !dropdownOpen.value;
 };
 
-async function showDeviceOnMap(data) {
-  const { lat, lon, fixTime, speed, ignition, charging, deviceName:name } = data;
+const showDeviceOnMap = (data) => {
+  const { lat, lon, fixTime, speed, ignition, charging, deviceName: name } = data;
   if (lat === undefined || lon === undefined) {
     console.error('Latitud o longitud no definida');
     Swal.fire({
@@ -149,14 +152,13 @@ async function showDeviceOnMap(data) {
     console.error('El mapa no está inicializado');
     return;
   }
+
+  // Limpiar marcadores existentes
   map.value.eachLayer((layer) => {
     if (layer instanceof L.Marker) {
       map.value.removeLayer(layer);
     }
   });
-  // Limpiar marcadores existentes
-
-  // Centrar el mapa en la ubicación del dispositivo
 
   // Añadir un nuevo marcador para el dispositivo
   const marker = L.marker([lat, lon]).addTo(map.value);
@@ -173,27 +175,38 @@ async function showDeviceOnMap(data) {
 
   // Asegurar que el mapa se centre después de un breve retraso
   setTimeout(() => {
-    map.value.setView([lat, lon], 18);
-    map.value.invalidateSize();
+    if (map.value) {
+      map.value.setView([lat, lon], 18);
+      map.value.invalidateSize();
+    }
   }, 100);
 
   console.log('Marcador añadido y mapa centrado');
   Swal.close(); // Cerrar el indicador de carga
-}
+};
+
+const fetchData = async (url) => {
+  try {
+    console.log(`Solicitando datos desde ${url}`);
+    const response = await axios.get(url);
+    console.log(`Datos recibidos de ${url}:`, response.data);
+    return response.data;
+  } catch (error) {
+    console.error(`Error al obtener datos de ${url}:`, error);
+    Swal.fire('Error', `No se pudieron cargar los datos: ${error.message}`, 'error');
+    return [];
+  }
+};
 
 const cargarDispositivos = async () => {
-  try {
-    const response = await fetch('http://3.12.147.103/devices');
-    if (!response.ok) {
-      throw new Error('Error en la respuesta de la API');
-    }
-    const data = await response.json();
-    console.log(data);
-    devices.value = data;
-  
-  } catch (error) {
-    console.error('Error al cargar dispositivos:', error);
-  }
+  devices.value = await fetchData('http://3.12.147.103/devices');
+  console.log('Dispositivos cargados:', devices.value);
+};
+
+const cargarGeozonas = async () => {
+  geozones.value = await fetchData('http://3.12.147.103/geozone/geozones');
+  filteredResults.value = geozones.value;
+  console.log('Geozonas cargadas:', geozones.value);
 };
 
 async function startTracking(device) {
@@ -212,23 +225,6 @@ async function startTracking(device) {
   }
 }
 
-
-
-
-const cargarGeozonas = async () => {
-  try {
-    const response = await fetch('http://3.12.147.103/geozone/geozones');
-    if (!response.ok) {
-      throw new Error('Error en la respuesta de la API');
-    }
-    const data = await response.json();
-    geozones.value = data;
-    console.log('Geozonas cargadas:', geozones.value);
-    filteredResults.value = geozones.value;
-  } catch (error) {
-    console.error('Error al cargar geozonas:', error);
-  }
-};
 
 const initMap = () => {
   if (!map.value) {
@@ -253,6 +249,8 @@ const initMap = () => {
       createZone: true,
     });
 
+    map.value.on('pm:create', handleShapeCreation);
+
     map.value.on('pm:create', (e) => {
       const layer = e.layer;
       drawnItems.value.addLayer(layer);
@@ -275,6 +273,26 @@ const initMap = () => {
       console.log('Forma eliminada:', e.layer);
     });
   }
+};
+const handleShapeCreation = (e) => {
+  const layer = e.layer;
+  drawnItems.value.addLayer(layer);
+
+  if (layer instanceof L.Circle) {
+    coordinates = {
+      center: layer.getLatLng(),
+      radius: layer.getRadius(),
+      type: 'Circle'
+    };
+  } else {
+    coordinates = {
+      vertices: layer.getLatLngs()[0],
+      type: 'Polygon'
+    };
+  }
+
+  console.log('Coordenadas creadas:', coordinates);
+  showModal.value = true;
 };
 
 const storeShape = (layer, geozoneId) => {
@@ -320,52 +338,28 @@ const selectGeozone = (geozone) => {
   }
 };
 
-const deleteLastShape = () => {
-  if (!selectedGeozone.value || !geozoneShapes.value[selectedGeozone.value.id]) {
-    Swal.fire({
-      icon: 'error',
-      title: 'Error',
-      text: 'No hay formas asociadas a esta geozona.',
-    });
-    return;
-  }
 
-  const shapesForGeozone = geozoneShapes.value[selectedGeozone.value.id];
-  if (shapesForGeozone.length === 0) {
-    Swal.fire({
-      icon: 'info',
-      title: 'Sin Geozonas',
-      text: 'Esta geozona no tiene formas creadas.',
-    });
-    return;
-  }
 
-  const lastShape = shapesForGeozone.pop();
-  if (lastShape) {
-    map.value.removeLayer(lastShape);
-    Swal.fire({
-      icon: 'success',
-      title: 'Geozona Eliminada',
-      text: 'La última forma creada ha sido eliminada.',
-    });
-  }
-};
 
-const filterResults = () => {
+const filterResults = computed( () => {
   const query = searchQuery.value.toLowerCase();
-  filteredResults.value = geozones.value.filter(item => {
-    return item.name.toLowerCase().includes(query);
-  });
-};
+  return geozones.value.filter((geozone) => 
+    geozone.name.toLowerCase().includes(searchQuery.value.toLowerCase(query))
+  );
+});
 
 
 const openModal = () => {
-  showDeviceModal.value = true;
+  showModal.value = true;
 };
 
 const closeModal = () => {
   showModal.value = false;
+  coordinates = null; 
+};
+const closeDeviceModal = () => {
   showDeviceModal.value = false;
+  selectedDevices.value = []; // Limpia la selección
 };
 
 const toggleDeviceSelection = (device) => {
@@ -487,7 +481,10 @@ onUnmounted(() => {
     map.value.removeControl(routingControl);
   }
 });
+
+
 </script>
+
 <style scoped>
 .home {
   height: 100vh;
