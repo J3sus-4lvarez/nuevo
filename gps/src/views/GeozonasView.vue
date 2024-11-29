@@ -190,7 +190,7 @@ const cargarDispositivos = async () => {
     const data = await response.json();
     console.log(data);
     devices.value = data;
-    filteredResults.value = devices.value;
+  
   } catch (error) {
     console.error('Error al cargar dispositivos:', error);
   }
